@@ -118,7 +118,7 @@ Each delivery carries `X-Vero-Signature: sha256=...` (HMAC of the body with the 
 | `422 agt_keys_not_configured` | Organisation without its own AGT key - can't issue outside sandbox |
 | `400 insufficient_stock` | Product with `trackStock: true` without enough quantity |
 | `409 receipt_already_exists` | The invoice or debit note is already fully paid (cancel a receipt first if it was issued by mistake) |
-| `403 partial_payments_disabled` | `amount` is less than what is owed, but the company does not have partial payments enabled (`partialPaymentsEnabled` on the organisation; enabled by Vero support) |
+| `403 partial_payments_disabled` | `amount` is less than what is owed, but the company does not have partial payments enabled (`partialPaymentsEnabled` on the organisation; the owner turns it on in Definições → Perfil, or `PATCH /v1/organisations/{id}` with `{ "partialPaymentsEnabled": true }`) |
 | `400 invalid_amount` | `amount` is more than what is still owed |
 | `409 debit_note_has_receipts` | Cancelling a debit note that has an active receipt - cancel the receipt first |
 | `400 invalid_reason` | Receipt or debit-note cancellation with a reason other than `N`/`I` |
