@@ -30,7 +30,7 @@ Base URL: `https://api.vero.ao`
 - **Sandbox**: sandbox organisations (or `test` keys) never submit to the real AGT - `hash`, `atcud` and `agtStatus` come back `null` and the number has the `TESTE` prefix. Use it to test without AGT certification.
 - **`customers.ensure()` never persists in sandbox**: with a `test` key it returns an ephemeral customer whose `id` looks like `sandbox_cus_...` (not a UUID), rebuilt from the request and not stored. Use that `id` as `customerId` when creating the invoice - it works - but don't expect to find it later with `GET /customers`.
 - **Without its own AGT key configured, an organisation cannot issue any real fiscal document** (outside sandbox) - the API returns `422 agt_keys_not_configured`. This is intentional: each organisation signs its own documents, never with a shared key.
-- **Withholding tax** (*retenção na fonte*, Art. 67 of the Industrial Tax Code) - optional, off by default. Pass `applyWithholdingTax: true` when creating an invoice or pro-forma (or editing a pro-forma). It only applies if the organisation enabled it in the dashboard (Definições → Perfil → Retenção na fonte) and the amount is above the configured minimum - never send the computed amount yourself, the server always resolves it. It does not change `subtotal`/`taxAmount`/`total` (those remain the official fiscal values); it comes separately in the response's `withholdingTax` field (`{ type, rate, amount, description }` or `null`). On a pro-forma it carries over to the invoice automatically when you convert it.
+- **Withholding tax** (*retenção na fonte*, Art. 67 of the Industrial Tax Code) - optional, off by default. Mark each subject line with `items[].withholdingTax: true` (e.g. a service line; product lines usually stay unmarked) on invoices and pro-formas. The base is the sum of the marked lines (without VAT). It only applies if the organisation enabled it in the dashboard (Definições → Perfil → Retenção na fonte) and the base is above the configured minimum - never send the computed amount yourself, the server always resolves it. `applyWithholdingTax: true` is the old form (all lines) and is only used when no line is marked. It does not change `subtotal`/`taxAmount`/`total` (those remain the official fiscal values); it comes separately in the response's `withholdingTax` field (`{ type, rate, base, amount, description }` or `null`). On a pro-forma it carries over to the invoice automatically when you convert it. SDKs: @veroao/node ≥ 1.3.2 (published as 1.4.0), @veroao/core/react/widget ≥ 1.2.0.
 
 ## Typical flow: create an invoice
 
@@ -86,8 +86,9 @@ const invoice = await vero.invoices.create(orgId, {
 | Invoice (FT) / Invoice-receipt (FR) | `/v1/organisations/{orgId}/invoices` | `documentType: 'FT'` or `'FR'` |
 | Credit note | `/v1/organisations/{orgId}/invoices/{invoiceId}/credit-note` | Cancels/corrects an issued invoice |
 | Debit note | `/v1/organisations/{orgId}/debit-notes` | Standalone document. **No VAT** (DP 71/25, art. 3): lines at 0%, `taxExemptionCode` defaults to `M02`; `taxRate` 5/14 → `422 debit_note_tax_not_allowed` |
-| Receipt | `/v1/organisations/{orgId}/invoices/{invoiceId}/receipt` | Confirms payment of an FT (not an FR, which is already paid) |
-| Cancel receipt | `/v1/organisations/{orgId}/receipts/{id}/cancel` | Receipt issued by mistake. `{ "reason": "N" \| "I" }` - N: not sent to the customer, I: wrong customer (the only reasons the AGT accepts). The invoice becomes unpaid again. SDK: `vero.receipts.cancel(orgId, id, { reason: 'N' })` (@veroao/node ≥ 1.2) |
+| Receipt | `/v1/organisations/{orgId}/invoices/{invoiceId}/receipt` | Confirms payment of an FT (not an FR, which is already paid). Body (all optional): `amount` (cents, default = what is still owed), `receivedIn`, `receivedAt`, `paymentMethod`. SDK: `vero.receipts.create(orgId, invoiceId, {...})` |
+| Debit note receipt | `/v1/organisations/{orgId}/debit-notes/{debitNoteId}/receipt` | The customer paid a debit note. Same body and rules as the invoice receipt. The ND keeps `status: 'issued'`; it is paid when `paidAmount === total`. SDK: `vero.receipts.createForDebitNote(orgId, id, {...})` (@veroao/node ≥ 1.4) |
+| Cancel receipt | `/v1/organisations/{orgId}/receipts/{id}/cancel` | Receipt issued by mistake. `{ "reason": "N" \| "I" }` - N: not sent to the customer, I: wrong customer (the only reasons the AGT accepts). The invoice (or debit note) becomes unpaid again. SDK: `vero.receipts.cancel(orgId, id, { reason: 'N' })` (@veroao/node ≥ 1.2) |
 | Cancel debit note | `/v1/organisations/{orgId}/debit-notes/{id}/cancel` | Debit note issued by mistake. `{ "reason": "N" \| "I" }` - same two legal reasons as receipts; otherwise it cannot be cancelled. Leaves the totals and, if already validated, the cancellation is reported to the AGT (`agtCancelStatus`). SDK: `vero.debitNotes.cancel(orgId, id, { reason: 'I' })` (@veroao/node ≥ 1.3) |
 | Pro-forma | `/v1/organisations/{orgId}/proformas` | Not fiscal - use `.../{id}/convert` to turn it into a real invoice |
 | Delivery note | `/v1/organisations/{orgId}/invoices/{invoiceId}/delivery-note` | |
@@ -116,7 +117,10 @@ Each delivery carries `X-Vero-Signature: sha256=...` (HMAC of the body with the 
 | `403 forbidden` | A `pk_` key calling a route outside `/v1/widget/*` (cancelling invoices/receipts/debit notes requires the secret key, on the server) |
 | `422 agt_keys_not_configured` | Organisation without its own AGT key - can't issue outside sandbox |
 | `400 insufficient_stock` | Product with `trackStock: true` without enough quantity |
-| `409 receipt_already_exists` | There is already an active receipt for this invoice (cancel it first if it was issued by mistake) |
+| `409 receipt_already_exists` | The invoice or debit note is already fully paid (cancel a receipt first if it was issued by mistake) |
+| `403 partial_payments_disabled` | `amount` is less than what is owed, but the company does not have partial payments enabled (`partialPaymentsEnabled` on the organisation; enabled by Vero support) |
+| `400 invalid_amount` | `amount` is more than what is still owed |
+| `409 debit_note_has_receipts` | Cancelling a debit note that has an active receipt - cancel the receipt first |
 | `400 invalid_reason` | Receipt or debit-note cancellation with a reason other than `N`/`I` |
 | `409 already_cancelled` | The receipt or debit note was already cancelled |
 | `409 agt_pending` | The AGT is still validating the document - try cancelling again in a few minutes |
